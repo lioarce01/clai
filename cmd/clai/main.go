@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lioarce01/clai/internal/config"
 	"github.com/lioarce01/clai/internal/llm"
 	"github.com/lioarce01/clai/internal/storage"
@@ -59,15 +58,5 @@ func run() error {
 		return fmt.Errorf("init tui: %w", err)
 	}
 
-	p := tea.NewProgram(
-		app,
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
-
-	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("run program: %w", err)
-	}
-
-	return nil
+	return app.Run()
 }

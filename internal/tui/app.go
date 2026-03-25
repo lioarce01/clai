@@ -3,384 +3,460 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/gdamore/tcell/v2"
 	"github.com/google/uuid"
 	"github.com/lioarce01/clai/internal/config"
 	"github.com/lioarce01/clai/internal/llm"
 	"github.com/lioarce01/clai/internal/markdown"
 	"github.com/lioarce01/clai/internal/storage"
+	"github.com/rivo/tview"
 )
-
-// viewState represents the current UI mode.
-type viewState int
 
 const (
-	viewChat viewState = iota
-	viewSessions
-	viewSettings
+	pageMain     = "main"
+	pageSessions = "sessions"
+	pageSettings = "settings"
 )
 
-// streamTokenMsg carries a streaming delta from the LLM.
-type streamTokenMsg struct {
-	delta llm.StreamDelta
-}
-
-// sessionsLoadedMsg carries sessions loaded from storage.
-type sessionsLoadedMsg struct {
-	sessions []storage.Session
-	err      error
-}
-
-// sessionActivatedMsg carries a fully loaded session to make active.
-type sessionActivatedMsg struct {
-	session *storage.Session
-}
-
-// sessionPickerReadyMsg signals that the session picker data is loaded and state should switch.
-type sessionPickerReadyMsg struct {
-	sessions []storage.Session
-	activeID string
-}
-
-// App is the root Bubble Tea model.
+// App is the root tview application.
 type App struct {
+	tviewApp *tview.Application
+
+	// Layout primitives
+	pages      *tview.Pages
+	header     *tview.TextView
+	footer     *tview.TextView
+	chatView   *tview.TextView
+	inputField *tview.InputField
+
+	// Dependencies
 	cfg       *config.Config
 	llmClient llm.Client
 	store     storage.Store
 	renderer  *markdown.Renderer
-	styles    Styles
-	keymap    KeyMap
 
-	// UI state
-	state  viewState
-	width  int
-	height int
-	err    string
-
-	// Components
-	chat      Chat
-	sessions  SessionPicker
-	settings  Settings
-	header    Header
-	statusBar StatusBar
-
-	// Session state
-	currentSession *storage.Session
-	promptTokens   int
-	completeTokens int
-	streaming      bool
-	cancelStream   context.CancelFunc
-
-	// Active stream channel (for the canonical Bubble Tea channel pattern)
-	streamCh <-chan llm.StreamDelta
+	// Chat state — all access on the tview goroutine (via QueueUpdateDraw)
+	currentSession   *storage.Session
+	completedMsgs    []string // rendered completed messages
+	streamContent    string   // accumulating streaming content
+	streamReasoning  string   // accumulating streaming reasoning
+	streaming        bool
+	cancelStream     context.CancelFunc
+	promptTokens     int
+	completionTokens int
 }
 
-// New creates a new App model.
+// New creates a new App.
 func New(cfg *config.Config, llmClient llm.Client, store storage.Store) (*App, error) {
-	renderer, err := markdown.New(80)
+	renderer, err := markdown.New(76)
 	if err != nil {
 		return nil, fmt.Errorf("create markdown renderer: %w", err)
 	}
 
-	theme := DefaultTheme()
-	styles := NewStyles(theme)
-	keymap := DefaultKeyMap()
-
-	// Initialize components with placeholder dimensions (resized on first WindowSizeMsg)
-	chat := NewChat(styles, renderer, keymap, 80, 22)
-	header := NewHeader(styles, "v0.1.0")
-	header.SetModel(cfg.Model.Name)
-	statusBar := NewStatusBar(styles)
-
-	app := &App{
+	a := &App{
 		cfg:       cfg,
 		llmClient: llmClient,
 		store:     store,
 		renderer:  renderer,
-		styles:    styles,
-		keymap:    keymap,
-		state:     viewChat,
-		width:     80,
-		height:    24,
-		chat:      chat,
-		header:    header,
-		statusBar: statusBar,
 	}
-
-	return app, nil
+	a.buildUI()
+	return a, nil
 }
 
-// Init is called once when the program starts.
-func (a *App) Init() tea.Cmd {
-	return tea.Batch(
-		tea.SetWindowTitle("CLAI"),
-		a.loadOrCreateDefaultSession(),
-	)
-}
-
-func (a *App) loadOrCreateDefaultSession() tea.Cmd {
-	return func() tea.Msg {
-		sessions, err := a.store.ListSessions()
-		if err != nil {
-			return sessionsLoadedMsg{err: err}
-		}
-
-		if len(sessions) == 0 {
-			sess, err := a.store.CreateSession("New Session")
+// Run starts the tview event loop. It blocks until the user quits.
+func (a *App) Run() error {
+	// Load or create default session in a goroutine, then update UI safely.
+	go func() {
+		sess, err := a.loadOrCreateDefault()
+		a.tviewApp.QueueUpdateDraw(func() {
 			if err != nil {
-				return sessionsLoadedMsg{err: err}
+				a.setFooterError(err.Error())
+				return
 			}
-			return sessionsLoadedMsg{sessions: []storage.Session{*sess}}
-		}
+			a.activateSession(sess)
+		})
+	}()
 
-		return sessionsLoadedMsg{sessions: sessions}
-	}
+	return a.tviewApp.Run()
 }
 
-// waitForStreamDelta returns a Cmd that reads one delta from the stream channel.
-func waitForStreamDelta(ch <-chan llm.StreamDelta) tea.Cmd {
-	return func() tea.Msg {
-		delta, ok := <-ch
-		if !ok {
-			return streamTokenMsg{delta: llm.StreamDelta{Done: true}}
+// ── UI construction ─────────────────────────────────────────────────────────
+
+func (a *App) buildUI() {
+	a.tviewApp = tview.NewApplication()
+	a.tviewApp.EnableMouse(true)
+
+	// Header
+	a.header = tview.NewTextView()
+	a.header.SetDynamicColors(true)
+	a.header.SetBackgroundColor(tcell.ColorDefault)
+	a.header.SetTextColor(tcell.ColorDefault)
+
+	// Footer
+	a.footer = tview.NewTextView()
+	a.footer.SetDynamicColors(true)
+	a.footer.SetBackgroundColor(tcell.ColorDefault)
+	a.footer.SetTextColor(tcell.ColorDefault)
+
+	// Chat view
+	a.chatView = tview.NewTextView()
+	a.chatView.SetDynamicColors(true)
+	a.chatView.SetScrollable(true)
+	a.chatView.SetWrap(true)
+	a.chatView.SetWordWrap(true)
+	a.chatView.SetBackgroundColor(tcell.ColorDefault)
+	a.chatView.SetTextColor(tcell.ColorDefault)
+	a.chatView.SetChangedFunc(func() {
+		a.tviewApp.Draw()
+	})
+
+	// Write welcome message through ANSI writer
+	fmt.Fprint(tview.ANSIWriter(a.chatView), renderWelcome())
+
+	// Input field
+	a.inputField = tview.NewInputField()
+	a.inputField.SetLabel("")
+	a.inputField.SetPlaceholder("Type a message…")
+	a.inputField.SetBackgroundColor(tcell.ColorDefault)
+	a.inputField.SetFieldBackgroundColor(tcell.ColorDefault)
+	a.inputField.SetFieldTextColor(tcell.ColorDefault)
+	a.inputField.SetPlaceholderTextColor(tcell.ColorDefault)
+	a.inputField.SetLabelColor(tcell.ColorDefault)
+
+	a.inputField.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			a.sendMessage()
 		}
-		return streamTokenMsg{delta: delta}
-	}
-}
+	})
 
-// Update handles all incoming messages.
-func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
+	// Separator lines (simple TextViews with "─" characters)
+	sep1 := tview.NewTextView()
+	sep1.SetDynamicColors(false)
+	sep1.SetBackgroundColor(tcell.ColorDefault)
+	sep1.SetTextColor(tcell.ColorDefault)
+	sep1.SetText(strings.Repeat("─", 200)) // over-wide; tview clips to terminal width
 
-	switch m := msg.(type) {
-	// ── Window resize ──────────────────────────────────────────────────────
-	case tea.WindowSizeMsg:
-		a.width = m.Width
-		a.height = m.Height
-		a.resizeAll()
-		return a, nil
+	sep2 := tview.NewTextView()
+	sep2.SetDynamicColors(false)
+	sep2.SetBackgroundColor(tcell.ColorDefault)
+	sep2.SetTextColor(tcell.ColorDefault)
+	sep2.SetText(strings.Repeat("─", 200))
 
-	// ── Quit ───────────────────────────────────────────────────────────────
-	case tea.KeyMsg:
-		if m.String() == "ctrl+c" {
+	sep3 := tview.NewTextView()
+	sep3.SetDynamicColors(false)
+	sep3.SetBackgroundColor(tcell.ColorDefault)
+	sep3.SetTextColor(tcell.ColorDefault)
+	sep3.SetText(strings.Repeat("─", 200))
+
+	// Input wrapper (separator + field)
+	inputFlex := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(sep2, 1, 0, false).
+		AddItem(a.inputField, 1, 0, true).
+		AddItem(sep3, 1, 0, false)
+
+	// Main flex layout
+	mainFlex := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(a.header, 1, 0, false).
+		AddItem(sep1, 1, 0, false).
+		AddItem(a.chatView, 0, 1, false).
+		AddItem(inputFlex, 3, 0, true).
+		AddItem(a.footer, 1, 0, false)
+
+	a.pages = tview.NewPages()
+	a.pages.AddPage(pageMain, mainFlex, true, true)
+
+	a.tviewApp.SetRoot(a.pages, true)
+	a.tviewApp.SetFocus(a.inputField)
+
+	// Global key bindings
+	a.tviewApp.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Only act on the main page (no overlay active)
+		name, _ := a.pages.GetFrontPage()
+
+		switch event.Key() {
+		case tcell.KeyCtrlC, tcell.KeyCtrlQ:
 			if a.cancelStream != nil {
 				a.cancelStream()
 			}
-			return a, tea.Quit
-		}
+			a.tviewApp.Stop()
+			return nil
 
-		// Overlay-specific keys
-		if a.state == viewSessions || a.state == viewSettings {
-			if m.String() == "esc" {
-				a.state = viewChat
-				return a, nil
+		case tcell.KeyEscape:
+			if name != pageMain {
+				a.closeOverlay()
+				return nil
 			}
-		}
 
-		// Global keys (only in chat view)
-		if a.state == viewChat {
-			switch m.String() {
-			case "ctrl+n":
-				return a, a.createNewSession()
-			case "ctrl+s":
-				return a, a.loadSessionPickerCmd()
-			case "ctrl+o":
+		case tcell.KeyCtrlN:
+			if name == pageMain {
+				go a.newSessionAsync()
+				return nil
+			}
+
+		case tcell.KeyCtrlS:
+			if name == pageMain {
+				go a.openSessionPickerAsync()
+				return nil
+			}
+
+		case tcell.KeyCtrlO:
+			if name == pageMain {
 				a.openSettings()
-				return a, nil
-			case "ctrl+l":
-				a.chat.ClearView()
-				return a, nil
+				return nil
+			}
+
+		case tcell.KeyCtrlL:
+			if name == pageMain {
+				a.clearChatView()
+				return nil
 			}
 		}
+		return event
+	})
 
-	// ── Sessions loaded (initial load or after delete) ────────────────────
-	case sessionsLoadedMsg:
-		if m.err != nil {
-			a.err = m.err.Error()
-			return a, nil
-		}
-		if len(m.sessions) > 0 {
-			return a, a.activateSession(m.sessions[0].ID)
-		}
-		return a, nil
-
-	// ── Session picker data ready ─────────────────────────────────────────
-	case sessionPickerReadyMsg:
-		a.sessions = NewSessionPicker(a.styles, m.sessions, m.activeID, a.width, a.height)
-		a.state = viewSessions
-		return a, nil
-
-	// ── Session activated ─────────────────────────────────────────────────
-	case sessionActivatedMsg:
-		a.currentSession = m.session
-		a.statusBar.SetSessionName(m.session.Name)
-		a.header.SetConnected(true)
-		a.chat.LoadMessages(m.session.Messages)
-		return a, nil
-
-	// ── Send message ──────────────────────────────────────────────────────
-	case SendMessageMsg:
-		if a.currentSession == nil || a.streaming {
-			return a, nil
-		}
-		return a, a.sendMessage(m.Content)
-
-	// ── Stream token ──────────────────────────────────────────────────────
-	case streamTokenMsg:
-		if m.delta.Error != nil {
-			a.streaming = false
-			a.header.SetStreaming(false)
-			a.err = m.delta.Error.Error()
-			return a, nil
-		}
-		if m.delta.Done {
-			a.streaming = false
-			a.header.SetStreaming(false)
-			a.streamCh = nil
-			finalMsg := a.chat.FinishStream()
-			if finalMsg != nil && a.currentSession != nil {
-				_ = a.store.AddMessage(a.currentSession.ID, *finalMsg)
-				// Refresh session to get the potentially auto-renamed name
-				if sess, err := a.store.GetSession(a.currentSession.ID); err == nil {
-					a.currentSession = sess
-					a.statusBar.SetSessionName(sess.Name)
-				}
-			}
-			if m.delta.Usage != nil {
-				a.promptTokens = m.delta.Usage.PromptTokens
-				a.completeTokens = m.delta.Usage.CompletionTokens
-				a.statusBar.SetTokens(a.promptTokens, a.completeTokens)
-			}
-			return a, nil
-		}
-		// Append the token and schedule reading the next one
-		a.chat.AppendStream(m.delta.Content, m.delta.Reasoning)
-		if a.streamCh != nil {
-			return a, waitForStreamDelta(a.streamCh)
-		}
-		return a, nil
-
-	// ── Stream channel ready ─────────────────────────────────────────────
-	case streamChanReadyMsg:
-		a.streamCh = m.ch
-		a.cancelStream = m.cancel
-		return a, waitForStreamDelta(a.streamCh)
-
-	// ── Session selected from picker ──────────────────────────────────────
-	case SessionSelectedMsg:
-		a.state = viewChat
-		return a, a.activateSession(m.ID)
-
-	// ── Session delete ────────────────────────────────────────────────────
-	case SessionDeleteMsg:
-		return a, a.deleteSession(m.ID)
-
-	// ── New session ───────────────────────────────────────────────────────
-	case NewSessionMsg:
-		a.state = viewChat
-		return a, a.createNewSession()
-
-	// ── Settings saved ────────────────────────────────────────────────────
-	case SettingsSavedMsg:
-		a.cfg = m.Config
-		_ = config.Save(a.cfg)
-		a.llmClient = llm.NewClient(a.cfg.API.APIKey, a.cfg.API.BaseURL)
-		a.header.SetModel(a.cfg.Model.Name)
-		a.state = viewChat
-		return a, nil
-	}
-
-	// Delegate to sub-components
-	switch a.state {
-	case viewChat:
-		var chatCmd tea.Cmd
-		a.chat, chatCmd = a.chat.Update(msg)
-		cmds = append(cmds, chatCmd)
-
-	case viewSessions:
-		var spCmd tea.Cmd
-		a.sessions, spCmd = a.sessions.Update(msg)
-		cmds = append(cmds, spCmd)
-
-	case viewSettings:
-		var setCmd tea.Cmd
-		a.settings, setCmd = a.settings.Update(msg)
-		cmds = append(cmds, setCmd)
-	}
-
-	return a, tea.Batch(cmds...)
+	// Initial header/footer render
+	a.renderHeader()
+	a.renderFooter("", 0, 0)
 }
 
-// View renders the full terminal UI.
-func (a *App) View() string {
-	if a.width == 0 {
-		return "Loading…"
-	}
+// ── Header / Footer ─────────────────────────────────────────────────────────
 
-	header := a.header.View()
-	statusBar := a.statusBar.View()
-
-	headerH := lipgloss.Height(header)
-	statusH := lipgloss.Height(statusBar)
-	bodyH := a.height - headerH - statusH
-	if bodyH < 1 {
-		bodyH = 1
-	}
-
-	var body string
-	switch a.state {
-	case viewChat:
-		body = a.chat.View()
-	case viewSessions:
-		body = a.sessions.View()
-	case viewSettings:
-		body = a.settings.View()
-	}
-
-	// Show error banner if set
-	if a.err != "" {
-		errLine := a.styles.TextError.Width(a.width).Render("⚠ " + a.err)
-		body = errLine + "\n" + body
-	}
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		header,
-		body,
-		statusBar,
-	)
+func (a *App) renderHeader() {
+	modelName := a.cfg.Model.Name
+	left := Bold + "clai" + Reset
+	right := Dim + modelName + Reset
+	// Use a spacer that tview will naturally handle via text alignment trick:
+	// write left-aligned text then right-aligned via padding-between
+	text := left + "  " + Dim + "·" + Reset + "  " + right
+	a.header.Clear()
+	fmt.Fprint(tview.ANSIWriter(a.header), text)
 }
 
-// ── Private helpers ────────────────────────────────────────────────────────
-
-func (a *App) resizeAll() {
-	a.header.SetWidth(a.width)
-	a.statusBar.SetWidth(a.width)
-	headerH := 1
-	statusH := 1
-	bodyH := a.height - headerH - statusH
-	if bodyH < 1 {
-		bodyH = 1
+func (a *App) renderFooter(sessionName string, promptToks, completionToks int) {
+	left := Dim + sessionName + Reset
+	if promptToks > 0 || completionToks > 0 {
+		left += Dim + fmt.Sprintf("  %d↑ %d↓", promptToks, completionToks) + Reset
 	}
-	a.chat.Resize(a.width, bodyH)
-	a.renderer.SetWidth(a.width - 6)
+	right := Dim + "^N ^S ^O ^C" + Reset
+	text := left + "  " + right
+	a.footer.Clear()
+	fmt.Fprint(tview.ANSIWriter(a.footer), text)
 }
 
-func (a *App) activateSession(id string) tea.Cmd {
-	return func() tea.Msg {
-		sess, err := a.store.GetSession(id)
+func (a *App) setFooterError(msg string) {
+	a.footer.Clear()
+	fmt.Fprint(tview.ANSIWriter(a.footer), Bold+"error: "+Reset+Dim+msg+Reset)
+}
+
+// ── Chat view helpers ────────────────────────────────────────────────────────
+
+// rebuildChatView rewrites the entire chatView content from completedMsgs +
+// optional streaming state.  Must be called from within QueueUpdateDraw.
+func (a *App) rebuildChatView() {
+	_, _, w, _ := a.chatView.GetInnerRect()
+	if w <= 0 {
+		w = 80
+	}
+
+	var sb strings.Builder
+
+	if len(a.completedMsgs) == 0 && !a.streaming {
+		sb.WriteString(renderWelcome())
+	} else {
+		for _, rendered := range a.completedMsgs {
+			sb.WriteString(rendered)
+			sb.WriteString("\n\n")
+		}
+		if a.streaming {
+			msg := renderAssistantMessage(a.streamContent, a.streamReasoning, true, w)
+			sb.WriteString(msg)
+			sb.WriteString("\n")
+		}
+	}
+
+	a.chatView.Clear()
+	fmt.Fprint(tview.ANSIWriter(a.chatView), sb.String())
+	a.chatView.ScrollToEnd()
+}
+
+func (a *App) clearChatView() {
+	a.chatView.Clear()
+	fmt.Fprint(tview.ANSIWriter(a.chatView), renderWelcome())
+}
+
+// ── Session management ───────────────────────────────────────────────────────
+
+func (a *App) loadOrCreateDefault() (*storage.Session, error) {
+	sessions, err := a.store.ListSessions()
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	if len(sessions) == 0 {
+		sess, err := a.store.CreateSession("New Session")
 		if err != nil {
-			return sessionsLoadedMsg{err: err}
+			return nil, fmt.Errorf("create session: %w", err)
 		}
-		return sessionActivatedMsg{session: sess}
+		return sess, nil
 	}
+	sess, err := a.store.GetSession(sessions[0].ID)
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+	return sess, nil
 }
 
-func (a *App) sendMessage(content string) tea.Cmd {
-	// Build user message
+// activateSession switches to the given session.  Must be called on the tview
+// goroutine (or from within QueueUpdateDraw).
+func (a *App) activateSession(sess *storage.Session) {
+	a.currentSession = sess
+	a.completedMsgs = nil
+	a.streamContent = ""
+	a.streamReasoning = ""
+	a.streaming = false
+
+	_, _, w, _ := a.chatView.GetInnerRect()
+	if w <= 0 {
+		w = 80
+	}
+
+	for _, msg := range sess.Messages {
+		rendered := a.renderMessage(msg, false, w)
+		if rendered != "" {
+			a.completedMsgs = append(a.completedMsgs, rendered)
+		}
+	}
+
+	a.rebuildChatView()
+	a.renderHeader()
+	a.renderFooter(sess.Name, a.promptTokens, a.completionTokens)
+}
+
+func (a *App) newSessionAsync() {
+	sess, err := a.store.CreateSession("New Session")
+	a.tviewApp.QueueUpdateDraw(func() {
+		if err != nil {
+			a.setFooterError(err.Error())
+			return
+		}
+		a.closeOverlay()
+		a.activateSession(sess)
+	})
+}
+
+func (a *App) openSessionPickerAsync() {
+	sessions, err := a.store.ListSessions()
+	a.tviewApp.QueueUpdateDraw(func() {
+		if err != nil {
+			a.setFooterError(err.Error())
+			return
+		}
+		activeID := ""
+		if a.currentSession != nil {
+			activeID = a.currentSession.ID
+		}
+		modal := buildSessionModal(
+			sessions,
+			activeID,
+			func(id string) {
+				a.closeOverlay()
+				go func() {
+					sess, err := a.store.GetSession(id)
+					a.tviewApp.QueueUpdateDraw(func() {
+						if err != nil {
+							a.setFooterError(err.Error())
+							return
+						}
+						a.activateSession(sess)
+					})
+				}()
+			},
+			func(id string) {
+				go func() {
+					_ = a.store.DeleteSession(id)
+					newSessions, _ := a.store.ListSessions()
+					a.tviewApp.QueueUpdateDraw(func() {
+						a.closeOverlay()
+						if len(newSessions) == 0 {
+							go a.newSessionAsync()
+							return
+						}
+						go func() {
+							sess, err := a.store.GetSession(newSessions[0].ID)
+							a.tviewApp.QueueUpdateDraw(func() {
+								if err == nil {
+									a.activateSession(sess)
+								}
+							})
+						}()
+					})
+				}()
+			},
+			func() {
+				a.closeOverlay()
+				go a.newSessionAsync()
+			},
+			func() { a.closeOverlay() },
+		)
+		a.showOverlay(pageSessions, modal)
+	})
+}
+
+func (a *App) openSettings() {
+	modal := buildSettingsModal(
+		a.cfg,
+		func(newCfg *config.Config) {
+			a.cfg = newCfg
+			_ = config.Save(newCfg)
+			a.llmClient = llm.NewClient(newCfg.API.APIKey, newCfg.API.BaseURL)
+			a.closeOverlay()
+			a.renderHeader()
+		},
+		func() { a.closeOverlay() },
+	)
+	a.showOverlay(pageSettings, modal)
+}
+
+// showOverlay adds a centered overlay page and brings it to the front.
+func (a *App) showOverlay(name string, content tview.Primitive) {
+	// Wrap in a Flex to center the modal
+	centered := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(
+			tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(nil, 0, 1, false).
+				AddItem(content, 0, 3, true).
+				AddItem(nil, 0, 1, false),
+			0, 2, true,
+		).
+		AddItem(nil, 0, 1, false)
+
+	a.pages.AddPage(name, centered, true, true)
+	a.tviewApp.SetFocus(content)
+}
+
+func (a *App) closeOverlay() {
+	name, _ := a.pages.GetFrontPage()
+	if name != pageMain {
+		a.pages.RemovePage(name)
+	}
+	a.tviewApp.SetFocus(a.inputField)
+}
+
+// ── Message sending & streaming ──────────────────────────────────────────────
+
+func (a *App) sendMessage() {
+	if a.currentSession == nil || a.streaming {
+		return
+	}
+	content := strings.TrimSpace(a.inputField.GetText())
+	if content == "" {
+		return
+	}
+	a.inputField.SetText("")
+
 	userMsg := llm.Message{
 		ID:        uuid.New().String(),
 		Role:      llm.RoleUser,
@@ -388,34 +464,40 @@ func (a *App) sendMessage(content string) tea.Cmd {
 		CreatedAt: time.Now(),
 	}
 
-	// Persist the user message
+	// Persist user message
 	if err := a.store.AddMessage(a.currentSession.ID, userMsg); err != nil {
-		a.err = err.Error()
-		return nil
+		a.setFooterError(err.Error())
+		return
 	}
 
-	// Reload session to pick up potential name change
+	// Refresh session
 	if sess, err := a.store.GetSession(a.currentSession.ID); err == nil {
 		a.currentSession = sess
-		a.statusBar.SetSessionName(sess.Name)
 	}
 
-	a.chat.AddMessage(userMsg)
-	a.chat.StartStream()
-	a.streaming = true
-	a.header.SetStreaming(true)
-	a.err = ""
+	// Render and add to history
+	_, _, w, _ := a.chatView.GetInnerRect()
+	if w <= 0 {
+		w = 80
+	}
+	a.completedMsgs = append(a.completedMsgs, a.renderMessage(userMsg, false, w))
 
-	// Capture the messages for the LLM call (snapshot before async)
+	// Begin streaming
+	a.streaming = true
+	a.streamContent = ""
+	a.streamReasoning = ""
+	a.rebuildChatView()
+	a.renderFooter(a.currentSession.Name, a.promptTokens, a.completionTokens)
+
+	// Snapshot for goroutine
 	msgs := make([]llm.Message, len(a.currentSession.Messages))
 	copy(msgs, a.currentSession.Messages)
-
 	cfg := a.cfg
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	a.cancelStream = cancel
 
-	return func() tea.Msg {
+	go func() {
 		ch, err := a.llmClient.ChatCompletionStream(ctx, llm.CompletionParams{
 			Model:        cfg.Model.Name,
 			Messages:     msgs,
@@ -426,65 +508,129 @@ func (a *App) sendMessage(content string) tea.Cmd {
 		})
 		if err != nil {
 			cancel()
-			return streamTokenMsg{delta: llm.StreamDelta{Error: err, Done: true}}
+			a.tviewApp.QueueUpdateDraw(func() {
+				a.streaming = false
+				a.setFooterError(err.Error())
+			})
+			return
 		}
 
-		// Store the channel on the app — but we're inside a Cmd here.
-		// We return a special msg to hand the channel back to the model.
-		return streamChanReadyMsg{ch: ch, cancel: cancel}
-	}
-}
-
-// streamChanReadyMsg is sent when the LLM stream channel is ready.
-type streamChanReadyMsg struct {
-	ch     <-chan llm.StreamDelta
-	cancel context.CancelFunc
-}
-
-// createNewSession creates a new session and activates it.
-func (a *App) createNewSession() tea.Cmd {
-	return func() tea.Msg {
-		sess, err := a.store.CreateSession("New Session")
-		if err != nil {
-			return sessionsLoadedMsg{err: err}
+		for delta := range ch {
+			if delta.Error != nil {
+				cancel()
+				a.tviewApp.QueueUpdateDraw(func() {
+					a.streaming = false
+					a.setFooterError(delta.Error.Error())
+				})
+				return
+			}
+			if delta.Done {
+				usage := delta.Usage
+				a.tviewApp.QueueUpdateDraw(func() {
+					a.finishStream(usage)
+				})
+				return
+			}
+			// Accumulate and redraw
+			contentChunk := delta.Content
+			reasoningChunk := delta.Reasoning
+			a.tviewApp.QueueUpdateDraw(func() {
+				a.streamContent += contentChunk
+				a.streamReasoning += reasoningChunk
+				a.rebuildChatView()
+			})
 		}
-		return sessionActivatedMsg{session: sess}
-	}
+		// Channel closed without Done — treat as finished
+		a.tviewApp.QueueUpdateDraw(func() {
+			a.finishStream(nil)
+		})
+	}()
 }
 
-// loadSessionPickerCmd loads sessions and signals the picker to open.
-func (a *App) loadSessionPickerCmd() tea.Cmd {
-	activeID := ""
+// finishStream finalizes the streaming assistant message.
+// Must be called from within QueueUpdateDraw.
+func (a *App) finishStream(usage *llm.Usage) {
+	if !a.streaming {
+		return
+	}
+	a.streaming = false
+
+	if a.cancelStream != nil {
+		a.cancelStream()
+		a.cancelStream = nil
+	}
+
+	// Build final llm.Message and persist
+	finalMsg := llm.Message{
+		ID:        uuid.New().String(),
+		Role:      llm.RoleAssistant,
+		Content:   a.streamContent,
+		Reasoning: a.streamReasoning,
+		CreatedAt: time.Now(),
+	}
+
 	if a.currentSession != nil {
-		activeID = a.currentSession.ID
-	}
-	return func() tea.Msg {
-		sessions, err := a.store.ListSessions()
-		if err != nil {
-			return sessionsLoadedMsg{err: err}
+		_ = a.store.AddMessage(a.currentSession.ID, finalMsg)
+		// Refresh session (for potential auto-rename)
+		if sess, err := a.store.GetSession(a.currentSession.ID); err == nil {
+			a.currentSession = sess
 		}
-		return sessionPickerReadyMsg{sessions: sessions, activeID: activeID}
 	}
+
+	// Move streamed content into completed messages
+	_, _, w, _ := a.chatView.GetInnerRect()
+	if w <= 0 {
+		w = 80
+	}
+	rendered := a.renderMessage(finalMsg, false, w)
+	if rendered != "" {
+		a.completedMsgs = append(a.completedMsgs, rendered)
+	}
+	a.streamContent = ""
+	a.streamReasoning = ""
+
+	if usage != nil {
+		a.promptTokens = usage.PromptTokens
+		a.completionTokens = usage.CompletionTokens
+	}
+
+	a.rebuildChatView()
+	sessionName := ""
+	if a.currentSession != nil {
+		sessionName = a.currentSession.Name
+	}
+	a.renderFooter(sessionName, a.promptTokens, a.completionTokens)
 }
 
-func (a *App) openSettings() {
-	a.settings = NewSettings(a.styles, a.cfg, a.width, a.height)
-	a.state = viewSettings
-}
+// ── Message rendering ────────────────────────────────────────────────────────
 
-func (a *App) deleteSession(id string) tea.Cmd {
-	return func() tea.Msg {
-		_ = a.store.DeleteSession(id)
-		sessions, err := a.store.ListSessions()
+// renderMessage converts an llm.Message to a styled string for display.
+func (a *App) renderMessage(msg llm.Message, isStreaming bool, width int) string {
+	switch msg.Role {
+	case llm.RoleUser:
+		// Use markdown renderer for content, then apply user formatting
+		rendered, err := a.renderer.Render(msg.Content)
 		if err != nil {
-			return sessionsLoadedMsg{err: err}
+			rendered = msg.Content
 		}
-		if len(sessions) == 0 {
-			sess, _ := a.store.CreateSession("New Session")
-			if sess != nil {
-				sessions = []storage.Session{*sess}
+		rendered = strings.TrimSpace(rendered)
+		return renderUserMessage(rendered, width)
+
+	case llm.RoleAssistant:
+		// Use markdown renderer for content
+		displayContent := msg.Content
+		if displayContent != "" {
+			rendered, err := a.renderer.Render(msg.Content)
+			if err == nil {
+				displayContent = strings.TrimSpace(rendered)
 			}
 		}
-		return sessionsLoadedMsg{sessions: sessions}
+		return renderAssistantMessage(displayContent, msg.Reasoning, isStreaming, width)
+
+	case llm.RoleSystem:
+		return Dim + Italic + "  [system] " + msg.Content + Reset
+
+	default:
+		return msg.Content
 	}
 }
