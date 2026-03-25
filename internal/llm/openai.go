@@ -1,15 +1,23 @@
 package llm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 )
 
 type openAIClient struct {
-	client *openai.Client
+	client  *openai.Client
+	apiKey  string
+	baseURL string
+	http    *http.Client
 }
 
 func newOpenAIClient(apiKey, baseURL string) *openAIClient {
@@ -17,21 +25,22 @@ func newOpenAIClient(apiKey, baseURL string) *openAIClient {
 	if baseURL != "" {
 		cfg.BaseURL = baseURL
 	}
-	return &openAIClient{client: openai.NewClientWithConfig(cfg)}
+	return &openAIClient{
+		client:  openai.NewClientWithConfig(cfg),
+		apiKey:  apiKey,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{},
+	}
 }
 
-// toOpenAIMessages converts our internal Message slice to the openai SDK format,
-// prepending the system prompt if provided.
 func toOpenAIMessages(params CompletionParams) []openai.ChatCompletionMessage {
 	msgs := make([]openai.ChatCompletionMessage, 0, len(params.Messages)+1)
-
 	if params.SystemPrompt != "" {
 		msgs = append(msgs, openai.ChatCompletionMessage{
 			Role:    string(RoleSystem),
 			Content: params.SystemPrompt,
 		})
 	}
-
 	for _, m := range params.Messages {
 		msgs = append(msgs, openai.ChatCompletionMessage{
 			Role:    string(m.Role),
@@ -52,11 +61,9 @@ func (c *openAIClient) ChatCompletion(ctx context.Context, params CompletionPara
 	if err != nil {
 		return Message{}, fmt.Errorf("chat completion: %w", err)
 	}
-
 	if len(resp.Choices) == 0 {
 		return Message{}, fmt.Errorf("no completion choices returned")
 	}
-
 	return Message{
 		Role:    RoleAssistant,
 		Content: resp.Choices[0].Message.Content,
@@ -64,47 +71,151 @@ func (c *openAIClient) ChatCompletion(ctx context.Context, params CompletionPara
 	}, nil
 }
 
+// sseChunk is the raw JSON structure of each SSE event.
+// It covers both standard OpenAI and reasoning model formats (OpenRouter, etc.).
+type sseChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content   *string `json:"content"`
+			Reasoning string  `json:"reasoning"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
 func (c *openAIClient) ChatCompletionStream(ctx context.Context, params CompletionParams) (<-chan StreamDelta, error) {
-	stream, err := c.client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
+	// Build request body manually so we can read raw SSE bytes.
+	type reqMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	type reqBody struct {
+		Model       string       `json:"model"`
+		Messages    []reqMessage `json:"messages"`
+		Temperature float64      `json:"temperature"`
+		MaxTokens   int          `json:"max_tokens"`
+		TopP        float64      `json:"top_p"`
+		Stream      bool         `json:"stream"`
+		StreamUsage *struct {
+			IncludeUsage bool `json:"include_usage"`
+		} `json:"stream_options,omitempty"`
+	}
+
+	oaiMsgs := toOpenAIMessages(params)
+	msgs := make([]reqMessage, len(oaiMsgs))
+	for i, m := range oaiMsgs {
+		msgs[i] = reqMessage{Role: m.Role, Content: m.Content}
+	}
+
+	body := reqBody{
 		Model:       params.Model,
-		Messages:    toOpenAIMessages(params),
-		Temperature: float32(params.Temperature),
+		Messages:    msgs,
+		Temperature: params.Temperature,
 		MaxTokens:   params.MaxTokens,
-		TopP:        float32(params.TopP),
+		TopP:        params.TopP,
 		Stream:      true,
-	})
+	}
+
+	bodyBytes, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("create stream: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	baseURL := c.baseURL
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		baseURL+"/chat/completions",
+		bytes.NewReader(bodyBytes),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(b))
 	}
 
 	ch := make(chan StreamDelta, 64)
 
 	go func() {
 		defer close(ch)
-		defer stream.Close()
+		defer resp.Body.Close()
 
-		for {
-			resp, err := stream.Recv()
-			if err != nil {
-				if err == io.EOF {
-					ch <- StreamDelta{Done: true}
-				} else {
-					ch <- StreamDelta{Error: err, Done: true}
-				}
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				ch <- StreamDelta{Done: true}
 				return
 			}
 
-			if len(resp.Choices) > 0 {
-				delta := resp.Choices[0].Delta.Content
-				if delta != "" {
-					select {
-					case ch <- StreamDelta{Content: delta}:
-					case <-ctx.Done():
-						ch <- StreamDelta{Error: ctx.Err(), Done: true}
-						return
-					}
+			var chunk sseChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+
+			var delta StreamDelta
+
+			if chunk.Usage != nil {
+				delta.Usage = &Usage{
+					PromptTokens:     chunk.Usage.PromptTokens,
+					CompletionTokens: chunk.Usage.CompletionTokens,
+					TotalTokens:      chunk.Usage.TotalTokens,
 				}
 			}
+
+			if len(chunk.Choices) > 0 {
+				d := chunk.Choices[0].Delta
+				if d.Content != nil {
+					delta.Content = *d.Content
+				}
+				delta.Reasoning = d.Reasoning
+
+				if chunk.Choices[0].FinishReason != nil && *chunk.Choices[0].FinishReason != "" {
+					delta.Done = true
+				}
+			}
+
+			if delta.Content != "" || delta.Reasoning != "" || delta.Usage != nil {
+				select {
+				case ch <- delta:
+				case <-ctx.Done():
+					ch <- StreamDelta{Error: ctx.Err(), Done: true}
+					return
+				}
+			}
+
+			if delta.Done {
+				return
+			}
+		}
+
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			ch <- StreamDelta{Error: err, Done: true}
+		} else {
+			ch <- StreamDelta{Done: true}
 		}
 	}()
 

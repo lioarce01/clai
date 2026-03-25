@@ -257,7 +257,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		// Append the token and schedule reading the next one
-		a.chat.AppendStream(m.delta.Content)
+		a.chat.AppendStream(m.delta.Content, m.delta.Reasoning)
 		if a.streamCh != nil {
 			return a, waitForStreamDelta(a.streamCh)
 		}

@@ -54,20 +54,34 @@ func (mv MessageView) Render(msg llm.Message, isStreaming bool) string {
 				Foreground(mv.styles.theme.Warning).
 				Render(" ●")
 		}
+
+		var parts []string
+
+		// Render reasoning block if present
+		if msg.Reasoning != "" {
+			parts = append(parts, mv.renderReasoning(msg.Reasoning, isStreaming, innerWidth))
+		}
+
+		// Render main content
 		rendered, err := mv.renderer.Render(msg.Content)
 		if err != nil {
 			rendered = msg.Content
 		}
 		content = strings.TrimRight(rendered, "\n")
-		if isStreaming && content == "" {
+		if isStreaming && content == "" && msg.Reasoning == "" {
 			content = lipgloss.NewStyle().
 				Foreground(mv.styles.theme.Warning).
 				Render("▋")
 		}
+		if content != "" {
+			parts = append(parts, content)
+		}
+
 		bubble := mv.styles.AssistantBubble.Width(innerWidth)
 		ts := mv.styles.TextSubtle.Render(msg.CreatedAt.Format("15:04"))
 		header := fmt.Sprintf("%s  %s", badge, ts)
-		return bubble.Render(header + "\n" + content)
+		body := strings.Join(parts, "\n")
+		return bubble.Render(header + "\n" + body)
 
 	case llm.RoleSystem:
 		badge = mv.styles.SystemBadge.Render("  System")
@@ -78,6 +92,77 @@ func (mv MessageView) Render(msg llm.Message, isStreaming bool) string {
 	default:
 		return msg.Content
 	}
+}
+
+// renderReasoning renders the model's internal reasoning in a distinct "thinking" block.
+func (mv MessageView) renderReasoning(reasoning string, isStreaming bool, innerWidth int) string {
+	t := mv.styles.theme
+
+	label := lipgloss.NewStyle().
+		Foreground(t.TextSubtle).
+		Italic(true).
+		Render("💭 Thinking")
+
+	if isStreaming {
+		label += lipgloss.NewStyle().
+			Foreground(t.Warning).
+			Render(" ●")
+	}
+
+	// Wrap reasoning text, dim and italic
+	reasoningStyle := lipgloss.NewStyle().
+		Foreground(t.TextSubtle).
+		Italic(true)
+
+	// Word-wrap manually to innerWidth - 4 (account for block padding)
+	wrapWidth := innerWidth - 4
+	if wrapWidth < 20 {
+		wrapWidth = 20
+	}
+	wrapped := wordWrap(reasoning, wrapWidth)
+	body := reasoningStyle.Render(wrapped)
+
+	block := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(t.TextSubtle).
+		PaddingLeft(1).
+		Width(innerWidth - 2).
+		Render(label + "\n" + body)
+
+	return block
+}
+
+// wordWrap wraps text at the given column width, preserving existing newlines.
+func wordWrap(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	var result strings.Builder
+	for _, line := range strings.Split(text, "\n") {
+		if len(line) <= width {
+			result.WriteString(line)
+			result.WriteByte('\n')
+			continue
+		}
+		words := strings.Fields(line)
+		col := 0
+		for i, w := range words {
+			wl := len(w)
+			if col > 0 && col+1+wl > width {
+				result.WriteByte('\n')
+				col = 0
+			}
+			if col > 0 {
+				result.WriteByte(' ')
+				col++
+			}
+			result.WriteString(w)
+			col += wl
+			_ = i
+		}
+		result.WriteByte('\n')
+	}
+	return strings.TrimRight(result.String(), "\n")
 }
 
 // RenderWelcome returns the initial welcome message shown before any conversation.

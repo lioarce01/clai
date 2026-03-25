@@ -151,12 +151,13 @@ func (c *Chat) StartStream() {
 	c.viewport.GotoBottom()
 }
 
-// AppendStream adds content to the ongoing streaming message.
-func (c *Chat) AppendStream(content string) {
+// AppendStream adds content and/or reasoning to the ongoing streaming message.
+func (c *Chat) AppendStream(content, reasoning string) {
 	if c.streamingMsg == nil {
 		c.StartStream()
 	}
 	c.streamingMsg.Content += content
+	c.streamingMsg.Reasoning += reasoning
 	c.rebuildViewport()
 	if c.atBottom {
 		c.viewport.GotoBottom()
