@@ -2,11 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Header renders the top application bar.
+// Header renders the minimal top bar.
 type Header struct {
 	styles    Styles
 	width     int
@@ -28,27 +29,30 @@ func (h *Header) SetStreaming(s bool) { h.streaming = s }
 func (h Header) View() string {
 	t := h.styles.theme
 
-	title := h.styles.TextPrimary.Render(fmt.Sprintf("✦ CLAI %s", h.version))
+	left := lipgloss.NewStyle().Foreground(t.Primary).Bold(true).Render("✦ clai")
 
-	var connStatus string
+	var status string
 	if h.streaming {
-		connStatus = lipgloss.NewStyle().Foreground(t.Warning).Render("● streaming")
+		status = lipgloss.NewStyle().Foreground(t.Warning).Render("● generating")
 	} else if h.connected {
-		connStatus = lipgloss.NewStyle().Foreground(t.Success).Render("● connected")
+		status = lipgloss.NewStyle().Foreground(t.Success).Render("●")
 	} else {
-		connStatus = lipgloss.NewStyle().Foreground(t.Error).Render("○ disconnected")
+		status = lipgloss.NewStyle().Foreground(t.Error).Render("○")
 	}
 
-	modelStr := h.styles.TextMuted.Render(h.model)
+	model := lipgloss.NewStyle().Foreground(t.TextMuted).Render(h.model)
+	right := fmt.Sprintf("%s  %s", model, status)
 
-	right := fmt.Sprintf("%s  %s", modelStr, connStatus)
-	leftWidth := lipgloss.Width(title)
-	rightWidth := lipgloss.Width(right)
-	gap := h.width - leftWidth - rightWidth - 2 // account for padding
+	gap := h.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
 	if gap < 1 {
 		gap = 1
 	}
-	spaces := lipgloss.NewStyle().Render(fmt.Sprintf("%*s", gap, ""))
 
-	return h.styles.Header.Width(h.width).Render(title + spaces + right)
+	line := h.styles.Header.Width(h.width).Render(
+		left + strings.Repeat(" ", gap) + right,
+	)
+
+	// Faint divider below header
+	div := h.styles.Divider.Render(strings.Repeat("─", h.width))
+	return line + "\n" + div
 }

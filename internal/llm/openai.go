@@ -71,8 +71,8 @@ func (c *openAIClient) ChatCompletion(ctx context.Context, params CompletionPara
 	}, nil
 }
 
-// sseChunk is the raw JSON structure of each SSE event.
-// It covers both standard OpenAI and reasoning model formats (OpenRouter, etc.).
+// sseChunk is the raw structure of each SSE event from OpenAI-compatible APIs.
+// Handles both standard (content) and reasoning model (reasoning) formats.
 type sseChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -89,7 +89,6 @@ type sseChunk struct {
 }
 
 func (c *openAIClient) ChatCompletionStream(ctx context.Context, params CompletionParams) (<-chan StreamDelta, error) {
-	// Build request body manually so we can read raw SSE bytes.
 	type reqMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -101,9 +100,6 @@ func (c *openAIClient) ChatCompletionStream(ctx context.Context, params Completi
 		MaxTokens   int          `json:"max_tokens"`
 		TopP        float64      `json:"top_p"`
 		Stream      bool         `json:"stream"`
-		StreamUsage *struct {
-			IncludeUsage bool `json:"include_usage"`
-		} `json:"stream_options,omitempty"`
 	}
 
 	oaiMsgs := toOpenAIMessages(params)
@@ -112,16 +108,14 @@ func (c *openAIClient) ChatCompletionStream(ctx context.Context, params Completi
 		msgs[i] = reqMessage{Role: m.Role, Content: m.Content}
 	}
 
-	body := reqBody{
+	bodyBytes, err := json.Marshal(reqBody{
 		Model:       params.Model,
 		Messages:    msgs,
 		Temperature: params.Temperature,
 		MaxTokens:   params.MaxTokens,
 		TopP:        params.TopP,
 		Stream:      true,
-	}
-
-	bodyBytes, err := json.Marshal(body)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -159,6 +153,9 @@ func (c *openAIClient) ChatCompletionStream(ctx context.Context, params Completi
 		defer resp.Body.Close()
 
 		scanner := bufio.NewScanner(resp.Body)
+		// Increase buffer for large chunks
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -193,22 +190,23 @@ func (c *openAIClient) ChatCompletionStream(ctx context.Context, params Completi
 				}
 				delta.Reasoning = d.Reasoning
 
+				// Mark done on finish_reason but still deliver the delta
 				if chunk.Choices[0].FinishReason != nil && *chunk.Choices[0].FinishReason != "" {
 					delta.Done = true
 				}
 			}
 
-			if delta.Content != "" || delta.Reasoning != "" || delta.Usage != nil {
+			// Always send if there's anything to deliver
+			if delta.Content != "" || delta.Reasoning != "" || delta.Usage != nil || delta.Done {
 				select {
 				case ch <- delta:
 				case <-ctx.Done():
 					ch <- StreamDelta{Error: ctx.Err(), Done: true}
 					return
 				}
-			}
-
-			if delta.Done {
-				return
+				if delta.Done {
+					return
+				}
 			}
 		}
 

@@ -12,6 +12,7 @@ import (
 	"github.com/lioarce01/clai/internal/markdown"
 )
 
+
 // SendMessageMsg is sent when the user submits a message.
 type SendMessageMsg struct {
 	Content string
@@ -224,23 +225,18 @@ func (c *Chat) rebuildViewport() {
 }
 
 func (c Chat) View() string {
-	t := c.styles.theme
-
-	// Input border
-	var inputBorder lipgloss.Style
+	var inputStyle lipgloss.Style
 	if c.textarea.Focused() {
-		inputBorder = c.styles.InputBorderFocused
+		inputStyle = c.styles.InputFocused
 	} else {
-		inputBorder = c.styles.InputBorderUnfocused
+		inputStyle = c.styles.InputUnfocused
 	}
 
-	inputBox := inputBorder.Width(c.width - 4).Render(c.textarea.View())
+	inputBox := inputStyle.Width(c.width - 4).Render(c.textarea.View())
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		lipgloss.NewStyle().Foreground(t.BorderUnfocused).Width(c.width).Render(strings.Repeat("─", c.width)),
 		c.viewport.View(),
-		lipgloss.NewStyle().Foreground(t.BorderUnfocused).Width(c.width).Render(strings.Repeat("─", c.width)),
 		inputBox,
 	)
 }

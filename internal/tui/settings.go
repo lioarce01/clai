@@ -173,11 +173,11 @@ func (s Settings) View() string {
 		if i == s.focused {
 			inputStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(t.BorderFocused)
+				BorderForeground(t.Primary)
 		} else {
 			inputStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(t.BorderUnfocused)
+				BorderForeground(t.Border)
 		}
 
 		inputWidth := 40

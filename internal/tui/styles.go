@@ -2,35 +2,35 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Styles holds all pre-built Lip Gloss styles derived from the theme.
+// Styles holds all pre-built Lip Gloss styles.
 type Styles struct {
 	theme Theme
 
-	// App chrome
+	// Chrome
 	Header    lipgloss.Style
 	StatusBar lipgloss.Style
+	Divider   lipgloss.Style
 
-	// Chat area
-	ChatViewport lipgloss.Style
+	// Role labels
+	UserLabel lipgloss.Style
+	AILabel   lipgloss.Style
 
-	// Message bubbles
-	UserBubble      lipgloss.Style
-	AssistantBubble lipgloss.Style
-	SystemBubble    lipgloss.Style
+	// Message layout — left-border accent, no box
+	UserBlock lipgloss.Style
+	AIBlock   lipgloss.Style
 
-	// Role badges
-	UserBadge      lipgloss.Style
-	AssistantBadge lipgloss.Style
-	SystemBadge    lipgloss.Style
+	// Thinking block
+	ThinkingLabel lipgloss.Style
+	ThinkingBlock lipgloss.Style
 
 	// Input
-	InputBorderFocused   lipgloss.Style
-	InputBorderUnfocused lipgloss.Style
+	InputFocused   lipgloss.Style
+	InputUnfocused lipgloss.Style
 
 	// Overlay
 	OverlayBox lipgloss.Style
 
-	// Text variants
+	// Text helpers
 	TextMuted   lipgloss.Style
 	TextSubtle  lipgloss.Style
 	TextError   lipgloss.Style
@@ -39,64 +39,68 @@ type Styles struct {
 	TextPrimary lipgloss.Style
 }
 
-// NewStyles builds all styles from the given theme.
 func NewStyles(t Theme) Styles {
 	s := Styles{theme: t}
 
 	s.Header = lipgloss.NewStyle().
-		Background(t.Surface).
-		Foreground(t.Text).
-		Padding(0, 1).
-		Bold(true)
+		Foreground(t.TextMuted).
+		Padding(0, 2)
 
 	s.StatusBar = lipgloss.NewStyle().
-		Background(t.SurfaceAlt).
-		Foreground(t.TextMuted).
-		Padding(0, 1)
+		Foreground(t.TextSubtle).
+		Padding(0, 2)
 
-	s.ChatViewport = lipgloss.NewStyle().
-		Padding(0, 1)
+	s.Divider = lipgloss.NewStyle().
+		Foreground(t.BorderFaint)
 
-	s.UserBubble = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.UserBadge).
-		Padding(0, 1).
-		MarginTop(1)
-
-	s.AssistantBubble = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.AssistantBadge).
-		Padding(0, 1).
-		MarginTop(1)
-
-	s.SystemBubble = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.SystemBadge).
-		Padding(0, 1).
-		MarginTop(1)
-
-	s.UserBadge = lipgloss.NewStyle().
-		Foreground(t.UserBadge).
+	// Role labels — bold, colored
+	s.UserLabel = lipgloss.NewStyle().
+		Foreground(t.UserAccent).
 		Bold(true)
 
-	s.AssistantBadge = lipgloss.NewStyle().
-		Foreground(t.AssistantBadge).
+	s.AILabel = lipgloss.NewStyle().
+		Foreground(t.AIAccent).
 		Bold(true)
 
-	s.SystemBadge = lipgloss.NewStyle().
-		Foreground(t.SystemBadge).
-		Bold(true).
+	// Message blocks — left border accent, no top/bottom/right border
+	s.UserBlock = lipgloss.NewStyle().
+		BorderLeft(true).
+		BorderStyle(lipgloss.ThickBorder()).
+		BorderForeground(t.UserAccent).
+		PaddingLeft(2).
+		MarginTop(1)
+
+	s.AIBlock = lipgloss.NewStyle().
+		BorderLeft(true).
+		BorderStyle(lipgloss.ThickBorder()).
+		BorderForeground(t.AIAccent).
+		PaddingLeft(2).
+		MarginTop(1)
+
+	// Thinking block — faint left border, dimmed italic text
+	s.ThinkingLabel = lipgloss.NewStyle().
+		Foreground(t.TextSubtle).
 		Italic(true)
 
-	s.InputBorderFocused = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.BorderFocused).
-		Padding(0, 1)
+	s.ThinkingBlock = lipgloss.NewStyle().
+		BorderLeft(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(t.BorderFaint).
+		PaddingLeft(2).
+		MarginTop(1)
 
-	s.InputBorderUnfocused = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.BorderUnfocused).
-		Padding(0, 1)
+	// Input area
+	s.InputFocused = lipgloss.NewStyle().
+		BorderBottom(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(t.Primary).
+		Padding(0, 2)
+
+	s.InputUnfocused = lipgloss.NewStyle().
+		BorderBottom(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(t.BorderFaint).
+		Padding(0, 2)
 
 	s.OverlayBox = lipgloss.NewStyle().
 		Background(t.Surface).

@@ -2,25 +2,22 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// StatusBar renders the bottom application bar.
+// StatusBar renders the minimal bottom bar.
 type StatusBar struct {
 	styles       Styles
 	width        int
 	sessionName  string
 	promptToks   int
 	completeToks int
-	keyHints     string
 }
 
 func NewStatusBar(styles Styles) StatusBar {
-	return StatusBar{
-		styles:   styles,
-		keyHints: "^N new  ^S sessions  ^O settings  ^C quit",
-	}
+	return StatusBar{styles: styles}
 }
 
 func (s *StatusBar) SetWidth(w int)          { s.width = w }
@@ -33,31 +30,28 @@ func (s *StatusBar) SetTokens(prompt, complete int) {
 func (s StatusBar) View() string {
 	t := s.styles.theme
 
-	sessionPart := lipgloss.NewStyle().
-		Foreground(t.Primary).
-		Bold(true).
-		Render(fmt.Sprintf("  %s", s.sessionName))
+	div := s.styles.Divider.Render(strings.Repeat("─", s.width))
 
-	var tokenPart string
+	session := lipgloss.NewStyle().Foreground(t.TextMuted).Render(s.sessionName)
+
+	var toks string
 	if s.promptToks > 0 || s.completeToks > 0 {
-		tokenPart = lipgloss.NewStyle().
-			Foreground(t.TextMuted).
-			Render(fmt.Sprintf("  ↑%d ↓%d tok", s.promptToks, s.completeToks))
+		toks = lipgloss.NewStyle().Foreground(t.TextSubtle).
+			Render(fmt.Sprintf("  %d↑ %d↓", s.promptToks, s.completeToks))
 	}
 
-	hints := lipgloss.NewStyle().
-		Foreground(t.TextSubtle).
-		Render(s.keyHints + "  ")
+	hints := lipgloss.NewStyle().Foreground(t.TextSubtle).
+		Render("^N  ^S  ^O  ^C")
 
-	// Left section
-	left := sessionPart + tokenPart
-	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(hints)
-	gap := s.width - leftWidth - rightWidth
-	if gap < 0 {
-		gap = 0
+	left := session + toks
+	gap := s.width - lipgloss.Width(left) - lipgloss.Width(hints) - 4
+	if gap < 1 {
+		gap = 1
 	}
 
-	spaces := fmt.Sprintf("%*s", gap, "")
-	return s.styles.StatusBar.Width(s.width).Render(left + spaces + hints)
+	bar := s.styles.StatusBar.Width(s.width).Render(
+		left + strings.Repeat(" ", gap) + hints,
+	)
+
+	return div + "\n" + bar
 }

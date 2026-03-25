@@ -9,7 +9,7 @@ import (
 	"github.com/lioarce01/clai/internal/markdown"
 )
 
-// MessageView renders a single chat message.
+// MessageView renders a single chat message in a flat, minimal style.
 type MessageView struct {
 	styles   Styles
 	renderer *markdown.Renderer
@@ -22,170 +22,109 @@ func NewMessageView(styles Styles, renderer *markdown.Renderer, width int) Messa
 
 func (mv *MessageView) SetWidth(w int) {
 	mv.width = w
-	mv.renderer.SetWidth(w - 6) // account for border + padding
+	mv.renderer.SetWidth(w - 4)
 }
 
-// Render converts a message to a fully-styled terminal string.
+// Render converts a message to a styled terminal string.
 func (mv MessageView) Render(msg llm.Message, isStreaming bool) string {
-	innerWidth := mv.width - 6
-	if innerWidth < 20 {
-		innerWidth = 20
+	t := mv.styles.theme
+	contentWidth := mv.width - 4
+	if contentWidth < 20 {
+		contentWidth = 20
 	}
-
-	var badge, content string
 
 	switch msg.Role {
 	case llm.RoleUser:
-		badge = mv.styles.UserBadge.Render("  You")
+		label := mv.styles.UserLabel.Render("You")
+		ts := lipgloss.NewStyle().Foreground(t.TextSubtle).Render(msg.CreatedAt.Format("15:04"))
+		header := fmt.Sprintf("%s  %s", label, ts)
+
 		rendered, err := mv.renderer.Render(msg.Content)
 		if err != nil {
 			rendered = msg.Content
 		}
-		content = strings.TrimRight(rendered, "\n")
-		bubble := mv.styles.UserBubble.Width(innerWidth)
-		ts := mv.styles.TextSubtle.Render(msg.CreatedAt.Format("15:04"))
-		header := fmt.Sprintf("%s  %s", badge, ts)
-		return bubble.Render(header + "\n" + content)
+		body := strings.TrimSpace(rendered)
+
+		return mv.styles.UserBlock.Width(contentWidth).Render(header + "\n" + body)
 
 	case llm.RoleAssistant:
-		badge = mv.styles.AssistantBadge.Render("  Assistant")
+		labelText := "Assistant"
 		if isStreaming {
-			badge += lipgloss.NewStyle().
-				Foreground(mv.styles.theme.Warning).
-				Render(" ●")
+			dot := lipgloss.NewStyle().Foreground(t.Warning).Render(" ●")
+			labelText = mv.styles.AILabel.Render("Assistant") + dot
+		} else {
+			labelText = mv.styles.AILabel.Render("Assistant")
 		}
+		ts := lipgloss.NewStyle().Foreground(t.TextSubtle).Render(msg.CreatedAt.Format("15:04"))
+		header := fmt.Sprintf("%s  %s", labelText, ts)
 
-		var parts []string
+		var sections []string
+		sections = append(sections, header)
 
-		// Render reasoning block if present
+		// Reasoning block
 		if msg.Reasoning != "" {
-			parts = append(parts, mv.renderReasoning(msg.Reasoning, isStreaming, innerWidth))
+			sections = append(sections, mv.renderThinking(msg.Reasoning, isStreaming))
 		}
 
-		// Render main content
-		rendered, err := mv.renderer.Render(msg.Content)
-		if err != nil {
-			rendered = msg.Content
-		}
-		content = strings.TrimRight(rendered, "\n")
-		if isStreaming && content == "" && msg.Reasoning == "" {
-			content = lipgloss.NewStyle().
-				Foreground(mv.styles.theme.Warning).
-				Render("▋")
-		}
-		if content != "" {
-			parts = append(parts, content)
+		// Main content
+		if msg.Content != "" {
+			rendered, err := mv.renderer.Render(msg.Content)
+			if err != nil {
+				rendered = msg.Content
+			}
+			sections = append(sections, strings.TrimSpace(rendered))
+		} else if isStreaming && msg.Reasoning == "" {
+			// Show cursor only when nothing at all has arrived yet
+			sections = append(sections, lipgloss.NewStyle().Foreground(t.Warning).Render("▋"))
 		}
 
-		bubble := mv.styles.AssistantBubble.Width(innerWidth)
-		ts := mv.styles.TextSubtle.Render(msg.CreatedAt.Format("15:04"))
-		header := fmt.Sprintf("%s  %s", badge, ts)
-		body := strings.Join(parts, "\n")
-		return bubble.Render(header + "\n" + body)
+		body := strings.Join(sections, "\n")
+		return mv.styles.AIBlock.Width(contentWidth).Render(body)
 
 	case llm.RoleSystem:
-		badge = mv.styles.SystemBadge.Render("  System")
-		content = mv.styles.TextMuted.Render(msg.Content)
-		bubble := mv.styles.SystemBubble.Width(innerWidth)
-		return bubble.Render(badge + "\n" + content)
+		label := lipgloss.NewStyle().Foreground(t.TextSubtle).Italic(true).Render("system")
+		body := lipgloss.NewStyle().Foreground(t.TextSubtle).Italic(true).Render(msg.Content)
+		return mv.styles.AIBlock.Width(contentWidth).Render(label + "\n" + body)
 
 	default:
 		return msg.Content
 	}
 }
 
-// renderReasoning renders the model's internal reasoning in a distinct "thinking" block.
-func (mv MessageView) renderReasoning(reasoning string, isStreaming bool, innerWidth int) string {
+// renderThinking renders the model's reasoning in a subtle, left-bordered block.
+func (mv MessageView) renderThinking(reasoning string, isStreaming bool) string {
 	t := mv.styles.theme
 
-	label := lipgloss.NewStyle().
+	label := mv.styles.ThinkingLabel.Render("thinking")
+	if isStreaming {
+		label += lipgloss.NewStyle().Foreground(t.Warning).Render(" ●")
+	}
+
+	body := lipgloss.NewStyle().
 		Foreground(t.TextSubtle).
 		Italic(true).
-		Render("💭 Thinking")
+		Render(reasoning)
 
-	if isStreaming {
-		label += lipgloss.NewStyle().
-			Foreground(t.Warning).
-			Render(" ●")
-	}
-
-	// Wrap reasoning text, dim and italic
-	reasoningStyle := lipgloss.NewStyle().
-		Foreground(t.TextSubtle).
-		Italic(true)
-
-	// Word-wrap manually to innerWidth - 4 (account for block padding)
-	wrapWidth := innerWidth - 4
-	if wrapWidth < 20 {
-		wrapWidth = 20
-	}
-	wrapped := wordWrap(reasoning, wrapWidth)
-	body := reasoningStyle.Render(wrapped)
-
-	block := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(t.TextSubtle).
-		PaddingLeft(1).
-		Width(innerWidth - 2).
-		Render(label + "\n" + body)
-
-	return block
+	return mv.styles.ThinkingBlock.Render(label + "\n" + body)
 }
 
-// wordWrap wraps text at the given column width, preserving existing newlines.
-func wordWrap(text string, width int) string {
-	if width <= 0 {
-		return text
-	}
-	var result strings.Builder
-	for _, line := range strings.Split(text, "\n") {
-		if len(line) <= width {
-			result.WriteString(line)
-			result.WriteByte('\n')
-			continue
-		}
-		words := strings.Fields(line)
-		col := 0
-		for i, w := range words {
-			wl := len(w)
-			if col > 0 && col+1+wl > width {
-				result.WriteByte('\n')
-				col = 0
-			}
-			if col > 0 {
-				result.WriteByte(' ')
-				col++
-			}
-			result.WriteString(w)
-			col += wl
-			_ = i
-		}
-		result.WriteByte('\n')
-	}
-	return strings.TrimRight(result.String(), "\n")
-}
-
-// RenderWelcome returns the initial welcome message shown before any conversation.
+// RenderWelcome returns the welcome screen shown before any conversation.
 func RenderWelcome(styles Styles, width int) string {
 	t := styles.theme
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.Primary).
-		Padding(1, 3).
-		Width(width - 4)
 
 	title := lipgloss.NewStyle().
 		Foreground(t.Primary).
 		Bold(true).
-		Render("✦ Welcome to CLAI")
+		Render("✦ clai")
 
-	subtitle := lipgloss.NewStyle().
+	sub := lipgloss.NewStyle().
 		Foreground(t.TextMuted).
-		Render("A high-performance terminal LLM chat client")
+		Render("terminal chat for LLMs")
 
-	tips := lipgloss.NewStyle().
+	tip := lipgloss.NewStyle().
 		Foreground(t.TextSubtle).
-		Render("Start typing below  •  Ctrl+O to configure  •  Ctrl+H for help")
+		Render("ctrl+o  configure api key & model")
 
-	return "\n" + box.Render(title+"\n"+subtitle+"\n\n"+tips) + "\n"
+	_ = width
+	return "\n  " + title + "  " + sub + "\n  " + tip + "\n"
 }
