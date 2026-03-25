@@ -213,6 +213,42 @@ func (a *App) buildUI() {
 				a.clearChatView()
 				return nil
 			}
+
+		// Keyboard scroll — works in any terminal including MinGW
+		case tcell.KeyPgUp:
+			if name == pageMain {
+				row, col := a.chatView.GetScrollOffset()
+				a.chatView.ScrollTo(row-15, col)
+				return nil
+			}
+		case tcell.KeyPgDn:
+			if name == pageMain {
+				row, col := a.chatView.GetScrollOffset()
+				a.chatView.ScrollTo(row+15, col)
+				return nil
+			}
+		case tcell.KeyUp:
+			if name == pageMain {
+				row, col := a.chatView.GetScrollOffset()
+				a.chatView.ScrollTo(row-3, col)
+				return nil
+			}
+		case tcell.KeyDown:
+			if name == pageMain {
+				row, col := a.chatView.GetScrollOffset()
+				a.chatView.ScrollTo(row+3, col)
+				return nil
+			}
+		case tcell.KeyHome:
+			if name == pageMain {
+				a.chatView.ScrollToBeginning()
+				return nil
+			}
+		case tcell.KeyEnd:
+			if name == pageMain {
+				a.chatView.ScrollToEnd()
+				return nil
+			}
 		}
 		return event
 	})
