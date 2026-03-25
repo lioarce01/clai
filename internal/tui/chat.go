@@ -91,29 +91,35 @@ func (c Chat) Update(msg tea.Msg) (Chat, tea.Cmd) {
 				}
 			}
 			return c, nil
-		case "pgup", "pgdown":
-			var vpCmd tea.Cmd
-			c.viewport, vpCmd = c.viewport.Update(msg)
-			cmds = append(cmds, vpCmd)
+		case "pgup":
+			c.viewport.HalfViewUp()
 			c.atBottom = c.viewport.AtBottom()
-			return c, tea.Batch(cmds...)
-		case "alt+up", "alt+k":
+			return c, nil
+		case "pgdown":
+			c.viewport.HalfViewDown()
+			c.atBottom = c.viewport.AtBottom()
+			return c, nil
+		case "alt+up":
 			c.viewport.LineUp(3)
 			c.atBottom = c.viewport.AtBottom()
 			return c, nil
-		case "alt+down", "alt+j":
+		case "alt+down":
 			c.viewport.LineDown(3)
 			c.atBottom = c.viewport.AtBottom()
 			return c, nil
 		}
 
 	case tea.MouseMsg:
-		// Forward all mouse events to viewport (enables mouse wheel scroll)
-		var vpCmd tea.Cmd
-		c.viewport, vpCmd = c.viewport.Update(msg)
-		cmds = append(cmds, vpCmd)
-		c.atBottom = c.viewport.AtBottom()
-		return c, tea.Batch(cmds...)
+		switch m.Button {
+		case tea.MouseButtonWheelUp:
+			c.viewport.LineUp(3)
+			c.atBottom = c.viewport.AtBottom()
+			return c, nil
+		case tea.MouseButtonWheelDown:
+			c.viewport.LineDown(3)
+			c.atBottom = c.viewport.AtBottom()
+			return c, nil
+		}
 
 	case tea.WindowSizeMsg:
 		c.Resize(m.Width, m.Height)

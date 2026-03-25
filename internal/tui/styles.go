@@ -11,19 +11,11 @@ type Styles struct {
 	StatusBar lipgloss.Style
 	Divider   lipgloss.Style
 
-	// Role labels
-	UserLabel lipgloss.Style
-	AILabel   lipgloss.Style
+	// Messages
+	UserBlock lipgloss.Style // grey background, no border
+	AIBlock   lipgloss.Style // no background, no border
 
-	// Message layout — left-border accent, no box
-	UserBlock lipgloss.Style
-	AIBlock   lipgloss.Style
-
-	// Thinking block
-	ThinkingLabel lipgloss.Style
-	ThinkingBlock lipgloss.Style
-
-	// Input
+	// Input area — top + bottom border only
 	InputFocused   lipgloss.Style
 	InputUnfocused lipgloss.Style
 
@@ -53,54 +45,35 @@ func NewStyles(t Theme) Styles {
 	s.Divider = lipgloss.NewStyle().
 		Foreground(t.BorderFaint)
 
-	// Role labels — bold, colored
-	s.UserLabel = lipgloss.NewStyle().
-		Foreground(t.UserAccent).
-		Bold(true)
-
-	s.AILabel = lipgloss.NewStyle().
-		Foreground(t.AIAccent).
-		Bold(true)
-
-	// Message blocks — left border accent, no top/bottom/right border
+	// User message: subtle grey background highlight, padded, no border
 	s.UserBlock = lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(lipgloss.ThickBorder()).
-		BorderForeground(t.BorderFaint).
-		PaddingLeft(2).
+		Background(t.Surface).
+		Padding(1, 2).
 		MarginTop(1)
 
+	// Assistant message: plain, just spacing
 	s.AIBlock = lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(lipgloss.ThickBorder()).
-		BorderForeground(t.BorderFaint).
-		PaddingLeft(2).
+		Padding(0, 2).
 		MarginTop(1)
 
-	// Thinking block — faint left border, dimmed italic text
-	s.ThinkingLabel = lipgloss.NewStyle().
-		Foreground(t.TextSubtle).
-		Italic(true)
-
-	s.ThinkingBlock = lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(t.BorderFaint).
-		PaddingLeft(2).
-		MarginTop(1)
-
-	// Input area
+	// Input: top + bottom border, grey, no side borders
+	inputBorder := lipgloss.Border{
+		Top:    "─",
+		Bottom: "─",
+	}
 	s.InputFocused = lipgloss.NewStyle().
+		BorderTop(true).
 		BorderBottom(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(t.Primary).
-		Padding(0, 2)
+		BorderStyle(inputBorder).
+		BorderForeground(t.Border).
+		Padding(1, 2)
 
 	s.InputUnfocused = lipgloss.NewStyle().
+		BorderTop(true).
 		BorderBottom(true).
-		BorderStyle(lipgloss.NormalBorder()).
+		BorderStyle(inputBorder).
 		BorderForeground(t.BorderFaint).
-		Padding(0, 2)
+		Padding(1, 2)
 
 	s.OverlayBox = lipgloss.NewStyle().
 		Background(t.Surface).
