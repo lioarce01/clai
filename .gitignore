@@ -1,0 +1,34 @@
+# Binaries
+clai
+clai.exe
+*.exe
+*.out
+
+# Build output
+/dist/
+/bin/
+
+# Go
+*.test
+*.prof
+coverage.out
+
+# Config & secrets
+*.env
+.env*
+config.toml
+config.local.toml
+
+# Plans & notes (internal docs)
+*-PLAN.md
+*.plan.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
