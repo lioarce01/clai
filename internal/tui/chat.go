@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/clai/internal/llm"
-	"github.com/yourusername/clai/internal/markdown"
+	"github.com/lioarce01/clai/internal/llm"
+	"github.com/lioarce01/clai/internal/markdown"
 )
 
 // SendMessageMsg is sent when the user submits a message.

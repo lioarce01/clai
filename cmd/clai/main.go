@@ -5,10 +5,10 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/yourusername/clai/internal/config"
-	"github.com/yourusername/clai/internal/llm"
-	"github.com/yourusername/clai/internal/storage"
-	"github.com/yourusername/clai/internal/tui"
+	"github.com/lioarce01/clai/internal/config"
+	"github.com/lioarce01/clai/internal/llm"
+	"github.com/lioarce01/clai/internal/storage"
+	"github.com/lioarce01/clai/internal/tui"
 )
 
 func main() {

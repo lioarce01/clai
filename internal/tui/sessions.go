@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/clai/internal/storage"
+	"github.com/lioarce01/clai/internal/storage"
 )
 
 // SessionSelectedMsg is sent when the user selects a session.

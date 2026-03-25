@@ -8,10 +8,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
-	"github.com/yourusername/clai/internal/config"
-	"github.com/yourusername/clai/internal/llm"
-	"github.com/yourusername/clai/internal/markdown"
-	"github.com/yourusername/clai/internal/storage"
+	"github.com/lioarce01/clai/internal/config"
+	"github.com/lioarce01/clai/internal/llm"
+	"github.com/lioarce01/clai/internal/markdown"
+	"github.com/lioarce01/clai/internal/storage"
 )
 
 // viewState represents the current UI mode.

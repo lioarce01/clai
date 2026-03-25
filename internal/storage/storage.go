@@ -3,7 +3,7 @@ package storage
 import (
 	"time"
 
-	"github.com/yourusername/clai/internal/llm"
+	"github.com/lioarce01/clai/internal/llm"
 )
 
 // Session is a named conversation thread.

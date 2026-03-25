@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/clai/internal/llm"
-	"github.com/yourusername/clai/internal/markdown"
+	"github.com/lioarce01/clai/internal/llm"
+	"github.com/lioarce01/clai/internal/markdown"
 )
 
 // MessageView renders a single chat message.

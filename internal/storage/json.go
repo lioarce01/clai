@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/yourusername/clai/internal/llm"
+	"github.com/lioarce01/clai/internal/llm"
 )
 
 // JSONStore is a file-based storage backend. Each session is a separate JSON file.

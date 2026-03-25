@@ -1,4 +1,4 @@
-module github.com/yourusername/clai
+module github.com/lioarce01/clai
 
 go 1.26.1
 
