@@ -97,7 +97,7 @@ func (c *openAIClient) ChatCompletionStream(ctx context.Context, params Completi
 		Model       string       `json:"model"`
 		Messages    []reqMessage `json:"messages"`
 		Temperature float64      `json:"temperature"`
-		MaxTokens   int          `json:"max_tokens"`
+		MaxTokens   int          `json:"max_tokens,omitempty"` // omitted when 0 — lets provider decide
 		TopP        float64      `json:"top_p"`
 		Stream      bool         `json:"stream"`
 	}

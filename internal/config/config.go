@@ -45,7 +45,7 @@ func defaults() Config {
 		Model: ModelConfig{
 			Name:         "gpt-4o",
 			Temperature:  0.7,
-			MaxTokens:    4096,
+			MaxTokens:    0, // 0 = let the provider decide (avoids free-tier token budget errors)
 			TopP:         1.0,
 			SystemPrompt: "You are a helpful assistant.",
 		},
