@@ -66,14 +66,14 @@ func NewStyles(t Theme) Styles {
 	s.UserBlock = lipgloss.NewStyle().
 		BorderLeft(true).
 		BorderStyle(lipgloss.ThickBorder()).
-		BorderForeground(t.UserAccent).
+		BorderForeground(t.BorderFaint).
 		PaddingLeft(2).
 		MarginTop(1)
 
 	s.AIBlock = lipgloss.NewStyle().
 		BorderLeft(true).
 		BorderStyle(lipgloss.ThickBorder()).
-		BorderForeground(t.AIAccent).
+		BorderForeground(t.BorderFaint).
 		PaddingLeft(2).
 		MarginTop(1)
 

@@ -81,8 +81,8 @@ func (c Chat) Update(msg tea.Msg) (Chat, tea.Cmd) {
 
 	switch m := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case m.String() == "enter" && !m.Alt:
+		switch m.String() {
+		case "enter":
 			content := strings.TrimSpace(c.textarea.Value())
 			if content != "" {
 				c.textarea.Reset()
@@ -91,15 +91,29 @@ func (c Chat) Update(msg tea.Msg) (Chat, tea.Cmd) {
 				}
 			}
 			return c, nil
-		case m.String() == "up" || m.String() == "down" ||
-			m.String() == "pgup" || m.String() == "pgdown" ||
-			m.String() == "home" || m.String() == "end":
+		case "pgup", "pgdown":
 			var vpCmd tea.Cmd
 			c.viewport, vpCmd = c.viewport.Update(msg)
 			cmds = append(cmds, vpCmd)
 			c.atBottom = c.viewport.AtBottom()
 			return c, tea.Batch(cmds...)
+		case "alt+up", "alt+k":
+			c.viewport.LineUp(3)
+			c.atBottom = c.viewport.AtBottom()
+			return c, nil
+		case "alt+down", "alt+j":
+			c.viewport.LineDown(3)
+			c.atBottom = c.viewport.AtBottom()
+			return c, nil
 		}
+
+	case tea.MouseMsg:
+		// Forward all mouse events to viewport (enables mouse wheel scroll)
+		var vpCmd tea.Cmd
+		c.viewport, vpCmd = c.viewport.Update(msg)
+		cmds = append(cmds, vpCmd)
+		c.atBottom = c.viewport.AtBottom()
+		return c, tea.Batch(cmds...)
 
 	case tea.WindowSizeMsg:
 		c.Resize(m.Width, m.Height)
@@ -110,7 +124,6 @@ func (c Chat) Update(msg tea.Msg) (Chat, tea.Cmd) {
 	c.textarea, taCmd = c.textarea.Update(msg)
 	cmds = append(cmds, taCmd)
 
-	// Adjust textarea height dynamically (max 8 lines)
 	lineCount := c.textarea.LineCount()
 	if lineCount < 1 {
 		lineCount = 1
